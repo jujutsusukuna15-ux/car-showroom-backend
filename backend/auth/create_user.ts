@@ -1,12 +1,19 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { authDB } from "./db";
 import { CreateUserRequest, User } from "./types";
 import * as bcrypt from "bcrypt";
+import { requireRole, auditLog } from "./auth_middleware";
 
-// Creates a new user account.
-export const createUser = api<CreateUserRequest, User>(
+interface AuthenticatedCreateUserRequest extends CreateUserRequest {
+  authorization?: Header<"Authorization">;
+}
+
+// Creates a new user account. Admin-only.
+export const createUser = api<AuthenticatedCreateUserRequest, User>(
   { expose: true, method: "POST", path: "/auth/users" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin"]);
+
     // Check if username or email already exists
     const existingUser = await authDB.queryRow`
       SELECT id FROM users WHERE username = ${req.username} OR email = ${req.email}
@@ -29,6 +36,14 @@ export const createUser = api<CreateUserRequest, User>(
     if (!user) {
       throw APIError.internal("Failed to create user");
     }
+
+    await auditLog(
+      authContext.user.id,
+      "create",
+      "user",
+      user.id,
+      { username: user.username, role: user.role }
+    );
 
     return user;
   }
