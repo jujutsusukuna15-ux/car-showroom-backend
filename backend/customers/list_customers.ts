@@ -1,18 +1,23 @@
-import { api, Query } from "encore.dev/api";
+import { api, Query, Header } from "encore.dev/api";
 import { customersDB } from "./db";
 import { ListCustomersResponse, Customer, CustomerType } from "./types";
+import { requireRole } from "../auth/auth_middleware";
 
-interface ListCustomersRequest {
+interface AuthenticatedListCustomersRequest {
   page?: Query<number>;
   limit?: Query<number>;
   type?: Query<CustomerType>;
   search?: Query<string>;
+  authorization?: Header<"Authorization">;
 }
 
 // Retrieves all customers with optional filtering and search.
-export const listCustomers = api<ListCustomersRequest, ListCustomersResponse>(
+export const listCustomers = api<AuthenticatedListCustomersRequest, ListCustomersResponse>(
   { expose: true, method: "GET", path: "/customers" },
   async (req) => {
+    // Require cashier or admin role
+    await requireRole(req.authorization, ["admin", "cashier"]);
+
     const page = req.page || 1;
     const limit = req.limit || 50;
     const offset = (page - 1) * limit;

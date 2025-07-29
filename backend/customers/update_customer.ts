@@ -1,15 +1,20 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { customersDB } from "./db";
 import { UpdateCustomerRequest, Customer } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
 
-interface UpdateCustomerParams {
+interface AuthenticatedUpdateCustomerRequest extends UpdateCustomerRequest {
   id: number;
+  authorization?: Header<"Authorization">;
 }
 
 // Updates an existing customer record.
-export const updateCustomer = api<UpdateCustomerParams & UpdateCustomerRequest, Customer>(
+export const updateCustomer = api<AuthenticatedUpdateCustomerRequest, Customer>(
   { expose: true, method: "PUT", path: "/customers/:id" },
   async (req) => {
+    // Require cashier or admin role
+    const authContext = await requireRole(req.authorization, ["admin", "cashier"]);
+
     const updates: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
@@ -74,6 +79,15 @@ export const updateCustomer = api<UpdateCustomerParams & UpdateCustomerRequest, 
     if (!customer) {
       throw APIError.notFound("Customer not found");
     }
+
+    // Audit log
+    await auditLog(
+      authContext.user.id,
+      "update",
+      "customer",
+      req.id,
+      { updated_fields: Object.keys(req).filter(key => key !== "id" && key !== "authorization") }
+    );
 
     return customer;
   }

@@ -1,11 +1,19 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { transactionsDB } from "./db";
 import { CreateSalesTransactionRequest, SalesTransaction } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
+
+interface AuthenticatedCreateSalesTransactionRequest extends CreateSalesTransactionRequest {
+  authorization?: Header<"Authorization">;
+}
 
 // Creates a new sales transaction (selling vehicle to customer).
-export const createSalesTransaction = api<CreateSalesTransactionRequest, SalesTransaction>(
+export const createSalesTransaction = api<AuthenticatedCreateSalesTransactionRequest, SalesTransaction>(
   { expose: true, method: "POST", path: "/transactions/sales" },
   async (req) => {
+    // Require cashier or admin role
+    const authContext = await requireRole(req.authorization, ["admin", "cashier"]);
+
     // Check if vehicle exists and is ready to sell
     const vehicle = await transactionsDB.queryRow<{ id: number; status: string; approved_selling_price?: number }>`
       SELECT id, status, approved_selling_price FROM vehicles WHERE id = ${req.vehicle_id}
@@ -44,9 +52,6 @@ export const createSalesTransaction = api<CreateSalesTransactionRequest, SalesTr
     const taxAmount = (req.vehicle_price - discountAmount) * taxRate;
     const totalAmount = req.vehicle_price + taxAmount - discountAmount;
 
-    // TODO: Get cashier_id from auth context
-    const cashierId = 1; // Placeholder
-
     // Start transaction
     await transactionsDB.exec`BEGIN`;
 
@@ -61,7 +66,7 @@ export const createSalesTransaction = api<CreateSalesTransactionRequest, SalesTr
         VALUES (
           ${transactionNumber}, ${invoiceNumber}, ${req.vehicle_id}, ${req.customer_id}, 
           ${req.vehicle_price}, ${taxAmount}, ${discountAmount}, ${totalAmount}, 
-          ${req.payment_method}, ${req.payment_reference}, ${cashierId}, ${req.notes}
+          ${req.payment_method}, ${req.payment_reference}, ${authContext.user.id}, ${req.notes}
         )
         RETURNING id, transaction_number, invoice_number, vehicle_id, customer_id, vehicle_price,
                   tax_amount, discount_amount, total_amount, payment_method, payment_reference, 
@@ -73,7 +78,7 @@ export const createSalesTransaction = api<CreateSalesTransactionRequest, SalesTr
         UPDATE vehicles 
         SET final_selling_price = ${req.vehicle_price},
             sold_to_customer_id = ${req.customer_id},
-            sold_by_cashier = ${cashierId},
+            sold_by_cashier = ${authContext.user.id},
             sold_at = NOW(),
             status = 'sold',
             updated_at = NOW()
@@ -81,6 +86,20 @@ export const createSalesTransaction = api<CreateSalesTransactionRequest, SalesTr
       `;
 
       await transactionsDB.exec`COMMIT`;
+
+      // Audit log
+      await auditLog(
+        authContext.user.id,
+        "create",
+        "sales_transaction",
+        transaction!.id,
+        { 
+          transaction_number: transactionNumber,
+          vehicle_id: req.vehicle_id,
+          customer_id: req.customer_id,
+          amount: totalAmount
+        }
+      );
 
       return transaction!;
     } catch (error) {

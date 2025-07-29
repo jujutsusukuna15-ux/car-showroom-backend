@@ -1,11 +1,19 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { transactionsDB } from "./db";
 import { CreatePurchaseTransactionRequest, PurchaseTransaction } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
+
+interface AuthenticatedCreatePurchaseTransactionRequest extends CreatePurchaseTransactionRequest {
+  authorization?: Header<"Authorization">;
+}
 
 // Creates a new purchase transaction (buying vehicle from customer).
-export const createPurchaseTransaction = api<CreatePurchaseTransactionRequest, PurchaseTransaction>(
+export const createPurchaseTransaction = api<AuthenticatedCreatePurchaseTransactionRequest, PurchaseTransaction>(
   { expose: true, method: "POST", path: "/transactions/purchases" },
   async (req) => {
+    // Require cashier or admin role
+    const authContext = await requireRole(req.authorization, ["admin", "cashier"]);
+
     // Check if vehicle exists and is not already purchased
     const vehicle = await transactionsDB.queryRow<{ id: number; status: string }>`
       SELECT id, status FROM vehicles WHERE id = ${req.vehicle_id}
@@ -39,9 +47,6 @@ export const createPurchaseTransaction = api<CreatePurchaseTransactionRequest, P
     const taxAmount = req.vehicle_price * taxRate;
     const totalAmount = req.vehicle_price + taxAmount;
 
-    // TODO: Get cashier_id from auth context
-    const cashierId = 1; // Placeholder
-
     // Start transaction
     await transactionsDB.exec`BEGIN`;
 
@@ -55,7 +60,7 @@ export const createPurchaseTransaction = api<CreatePurchaseTransactionRequest, P
         VALUES (
           ${transactionNumber}, ${invoiceNumber}, ${req.vehicle_id}, ${req.customer_id}, 
           ${req.vehicle_price}, ${taxAmount}, ${totalAmount}, ${req.payment_method}, 
-          ${req.payment_reference}, ${cashierId}, ${req.notes}
+          ${req.payment_reference}, ${authContext.user.id}, ${req.notes}
         )
         RETURNING id, transaction_number, invoice_number, vehicle_id, customer_id, vehicle_price,
                   tax_amount, total_amount, payment_method, payment_reference, transaction_date,
@@ -67,13 +72,27 @@ export const createPurchaseTransaction = api<CreatePurchaseTransactionRequest, P
         UPDATE vehicles 
         SET purchase_price = ${req.vehicle_price}, 
             purchased_from_customer_id = ${req.customer_id},
-            purchased_by_cashier = ${cashierId},
+            purchased_by_cashier = ${authContext.user.id},
             purchased_at = NOW(),
             updated_at = NOW()
         WHERE id = ${req.vehicle_id}
       `;
 
       await transactionsDB.exec`COMMIT`;
+
+      // Audit log
+      await auditLog(
+        authContext.user.id,
+        "create",
+        "purchase_transaction",
+        transaction!.id,
+        { 
+          transaction_number: transactionNumber,
+          vehicle_id: req.vehicle_id,
+          customer_id: req.customer_id,
+          amount: totalAmount
+        }
+      );
 
       return transaction!;
     } catch (error) {

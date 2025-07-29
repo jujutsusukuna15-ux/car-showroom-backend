@@ -1,99 +1,165 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { vehiclesDB } from "./db";
 import { UpdateVehicleRequest, Vehicle } from "./types";
+import { requireAuth, auditLog, hasPermission } from "../auth/auth_middleware";
 
-interface UpdateVehicleParams {
+interface AuthenticatedUpdateVehicleRequest extends UpdateVehicleRequest {
   id: number;
+  authorization?: Header<"Authorization">;
 }
 
 // Updates an existing vehicle record.
-export const updateVehicle = api<UpdateVehicleParams & UpdateVehicleRequest, Vehicle>(
+export const updateVehicle = api<AuthenticatedUpdateVehicleRequest, Vehicle>(
   { expose: true, method: "PUT", path: "/vehicles/:id" },
   async (req) => {
+    const authContext = await requireAuth(req.authorization);
+
     const updates: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
 
+    // Role-based field restrictions
+    const userRole = authContext.user.role;
+
     if (req.license_plate !== undefined) {
-      updates.push(`license_plate = $${paramIndex}`);
-      params.push(req.license_plate);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`license_plate = $${paramIndex}`);
+        params.push(req.license_plate);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update license plate");
+      }
     }
 
     if (req.brand !== undefined) {
-      updates.push(`brand = $${paramIndex}`);
-      params.push(req.brand);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`brand = $${paramIndex}`);
+        params.push(req.brand);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update brand");
+      }
     }
 
     if (req.model !== undefined) {
-      updates.push(`model = $${paramIndex}`);
-      params.push(req.model);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`model = $${paramIndex}`);
+        params.push(req.model);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update model");
+      }
     }
 
     if (req.variant !== undefined) {
-      updates.push(`variant = $${paramIndex}`);
-      params.push(req.variant);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`variant = $${paramIndex}`);
+        params.push(req.variant);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update variant");
+      }
     }
 
     if (req.year !== undefined) {
-      updates.push(`year = $${paramIndex}`);
-      params.push(req.year);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`year = $${paramIndex}`);
+        params.push(req.year);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update year");
+      }
     }
 
     if (req.color !== undefined) {
-      updates.push(`color = $${paramIndex}`);
-      params.push(req.color);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`color = $${paramIndex}`);
+        params.push(req.color);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update color");
+      }
     }
 
     if (req.mileage !== undefined) {
-      updates.push(`mileage = $${paramIndex}`);
-      params.push(req.mileage);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`mileage = $${paramIndex}`);
+        params.push(req.mileage);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update mileage");
+      }
     }
 
     if (req.fuel_type !== undefined) {
-      updates.push(`fuel_type = $${paramIndex}`);
-      params.push(req.fuel_type);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`fuel_type = $${paramIndex}`);
+        params.push(req.fuel_type);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update fuel type");
+      }
     }
 
     if (req.transmission !== undefined) {
-      updates.push(`transmission = $${paramIndex}`);
-      params.push(req.transmission);
-      paramIndex++;
+      if (hasPermission(userRole, "update", "vehicles")) {
+        updates.push(`transmission = $${paramIndex}`);
+        params.push(req.transmission);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Not authorized to update transmission");
+      }
     }
 
     if (req.status !== undefined) {
+      // Mechanics can only update status for repair-related changes
+      if (userRole === "mechanic") {
+        const allowedStatuses = ["in_repair", "ready_to_sell"];
+        if (!allowedStatuses.includes(req.status)) {
+          throw APIError.permissionDenied("Mechanics can only set status to 'in_repair' or 'ready_to_sell'");
+        }
+      }
+      
       updates.push(`status = $${paramIndex}`);
       params.push(req.status);
       paramIndex++;
     }
 
     if (req.suggested_selling_price !== undefined) {
-      updates.push(`suggested_selling_price = $${paramIndex}`);
-      params.push(req.suggested_selling_price);
-      paramIndex++;
+      if (userRole !== "mechanic") {
+        updates.push(`suggested_selling_price = $${paramIndex}`);
+        params.push(req.suggested_selling_price);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Mechanics cannot set selling prices");
+      }
     }
 
     if (req.approved_selling_price !== undefined) {
-      updates.push(`approved_selling_price = $${paramIndex}`);
-      params.push(req.approved_selling_price);
-      paramIndex++;
-      // TODO: Set price_approved_by_admin from auth context
+      if (userRole === "admin") {
+        updates.push(`approved_selling_price = $${paramIndex}`);
+        params.push(req.approved_selling_price);
+        paramIndex++;
+        updates.push(`price_approved_by_admin = $${paramIndex}`);
+        params.push(authContext.user.id);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Only admins can approve selling prices");
+      }
     }
 
     if (req.final_selling_price !== undefined) {
-      updates.push(`final_selling_price = $${paramIndex}`);
-      params.push(req.final_selling_price);
-      paramIndex++;
+      if (userRole !== "mechanic") {
+        updates.push(`final_selling_price = $${paramIndex}`);
+        params.push(req.final_selling_price);
+        paramIndex++;
+      } else {
+        throw APIError.permissionDenied("Mechanics cannot set final selling prices");
+      }
     }
 
     if (req.condition_notes !== undefined) {
+      // All roles can update condition notes
       updates.push(`condition_notes = $${paramIndex}`);
       params.push(req.condition_notes);
       paramIndex++;
@@ -120,6 +186,21 @@ export const updateVehicle = api<UpdateVehicleParams & UpdateVehicleRequest, Veh
 
     if (!vehicle) {
       throw APIError.notFound("Vehicle not found");
+    }
+
+    // Audit log for important changes
+    if (req.approved_selling_price !== undefined || req.status !== undefined) {
+      await auditLog(
+        authContext.user.id,
+        "update",
+        "vehicle",
+        req.id,
+        { 
+          updated_fields: Object.keys(req).filter(key => key !== "id" && key !== "authorization"),
+          approved_price: req.approved_selling_price,
+          status_change: req.status
+        }
+      );
     }
 
     return vehicle;

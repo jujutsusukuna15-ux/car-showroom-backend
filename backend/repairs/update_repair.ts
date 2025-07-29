@@ -1,15 +1,35 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { repairsDB } from "./db";
 import { UpdateRepairRequest, Repair } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
 
-interface UpdateRepairParams {
+interface AuthenticatedUpdateRepairRequest extends UpdateRepairRequest {
   id: number;
+  authorization?: Header<"Authorization">;
 }
 
 // Updates an existing repair work order.
-export const updateRepair = api<UpdateRepairParams & UpdateRepairRequest, Repair>(
+export const updateRepair = api<AuthenticatedUpdateRepairRequest, Repair>(
   { expose: true, method: "PUT", path: "/repairs/:id" },
   async (req) => {
+    // Require mechanic or admin role
+    const authContext = await requireRole(req.authorization, ["admin", "mechanic"]);
+
+    // If user is mechanic, check if they are assigned to this repair
+    if (authContext.user.role === "mechanic") {
+      const repair = await repairsDB.queryRow<{ mechanic_id?: number }>`
+        SELECT mechanic_id FROM repairs WHERE id = ${req.id}
+      `;
+
+      if (!repair) {
+        throw APIError.notFound("Repair not found");
+      }
+
+      if (repair.mechanic_id && repair.mechanic_id !== authContext.user.id) {
+        throw APIError.permissionDenied("You can only update repairs assigned to you");
+      }
+    }
+
     const updates: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
@@ -40,12 +60,24 @@ export const updateRepair = api<UpdateRepairParams & UpdateRepairRequest, Repair
       // Set timestamps based on status
       if (req.status === "in_progress") {
         updates.push(`started_at = NOW()`);
+        if (authContext.user.role === "mechanic") {
+          updates.push(`mechanic_id = $${paramIndex}`);
+          params.push(authContext.user.id);
+          paramIndex++;
+        }
       } else if (req.status === "completed") {
         updates.push(`completed_at = NOW()`);
+        
+        // Update vehicle status to ready_to_sell when repair is completed
+        await repairsDB.exec`
+          UPDATE vehicles 
+          SET status = 'ready_to_sell', updated_at = NOW()
+          WHERE id = (SELECT vehicle_id FROM repairs WHERE id = ${req.id})
+        `;
       }
     }
 
-    if (req.mechanic_id !== undefined) {
+    if (req.mechanic_id !== undefined && authContext.user.role === "admin") {
       updates.push(`mechanic_id = $${paramIndex}`);
       params.push(req.mechanic_id);
       paramIndex++;
@@ -76,6 +108,20 @@ export const updateRepair = api<UpdateRepairParams & UpdateRepairRequest, Repair
 
     if (!repair) {
       throw APIError.notFound("Repair not found");
+    }
+
+    // Audit log for status changes
+    if (req.status !== undefined) {
+      await auditLog(
+        authContext.user.id,
+        "update",
+        "repair",
+        req.id,
+        { 
+          status_change: req.status,
+          mechanic_id: authContext.user.role === "mechanic" ? authContext.user.id : req.mechanic_id
+        }
+      );
     }
 
     return repair;
