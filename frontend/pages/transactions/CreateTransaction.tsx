@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -18,41 +18,53 @@ export function CreateTransaction() {
           Back to Transactions
         </Button>
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">New Transaction</h1>
-          <p className="text-gray-600">Create a new purchase or sales transaction</p>
+          <h1 className="text-3xl font-bold text-gray-900">Point of Sale</h1>
+          <p className="text-gray-600">Process vehicle transactions</p>
         </div>
       </div>
 
-      <Tabs defaultValue="purchase" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="purchase">Purchase Transaction</TabsTrigger>
-          <TabsTrigger value="sales">Sales Transaction</TabsTrigger>
+      <Tabs defaultValue="sales" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-2 h-12">
+          <TabsTrigger value="sales" className="flex items-center gap-2 text-base">
+            <DollarSign className="h-5 w-5" />
+            Vehicle Sale
+          </TabsTrigger>
+          <TabsTrigger value="purchase" className="flex items-center gap-2 text-base">
+            <ShoppingCart className="h-5 w-5" />
+            Vehicle Purchase
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="purchase">
+        <TabsContent value="sales">
           <Card>
-            <CardHeader>
-              <CardTitle>Purchase Transaction</CardTitle>
-              <CardDescription>
-                Record a vehicle purchase from a customer
+            <CardHeader className="bg-green-50 border-b">
+              <CardTitle className="flex items-center gap-2 text-green-800">
+                <DollarSign className="h-6 w-6" />
+                Sales Transaction
+              </CardTitle>
+              <CardDescription className="text-green-700">
+                Sell a vehicle to a customer
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <CreatePurchaseTransaction />
+            <CardContent className="p-6">
+              <CreateSalesTransaction />
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="sales">
+        <TabsContent value="purchase">
           <Card>
-            <CardHeader>
-              <CardTitle>Sales Transaction</CardTitle>
-              <CardDescription>
-                Record a vehicle sale to a customer
+            <CardHeader className="bg-blue-50 border-b">
+              <CardTitle className="flex items-center gap-2 text-blue-800">
+                <ShoppingCart className="h-6 w-6" />
+                Purchase Transaction
+              </CardTitle>
+              <CardDescription className="text-blue-700">
+                Buy a vehicle from a customer
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <CreateSalesTransaction />
+            <CardContent className="p-6">
+              <CreatePurchaseTransaction />
             </CardContent>
           </Card>
         </TabsContent>
