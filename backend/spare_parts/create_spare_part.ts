@@ -1,11 +1,18 @@
-import { api } from "encore.dev/api";
+import { api, Header } from "encore.dev/api";
 import { sparePartsDB } from "./db";
 import { CreateSparePartRequest, SparePart } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
 
-// Creates a new spare part record.
-export const createSparePart = api<CreateSparePartRequest, SparePart>(
+interface AuthenticatedCreateSparePartRequest extends CreateSparePartRequest {
+  authorization?: Header<"Authorization">;
+}
+
+// Creates a new spare part record. Admin-only.
+export const createSparePart = api<AuthenticatedCreateSparePartRequest, SparePart>(
   { expose: true, method: "POST", path: "/spare-parts" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin"]);
+
     // Generate part code
     const timestamp = Date.now().toString().slice(-6);
     const partCode = `SP${timestamp}`;
@@ -24,10 +31,13 @@ export const createSparePart = api<CreateSparePartRequest, SparePart>(
                 stock_quantity, min_stock_level, unit_measure, created_at, updated_at, is_active
     `;
 
+    if (!sparePart) {
+      throw new Error("Failed to create spare part");
+    }
+
     // Create initial stock movement if quantity > 0
     if (req.stock_quantity && req.stock_quantity > 0) {
-      // TODO: Get processed_by from auth context
-      const processedBy = 1; // Placeholder
+      const processedBy = authContext.user.id;
 
       await sparePartsDB.exec`
         INSERT INTO stock_movements (
@@ -35,12 +45,20 @@ export const createSparePart = api<CreateSparePartRequest, SparePart>(
           quantity_moved, quantity_after, processed_by, notes
         )
         VALUES (
-          ${sparePart!.id}, 'in', 'adjustment', 0, ${req.stock_quantity}, 
+          ${sparePart.id}, 'in', 'adjustment', 0, ${req.stock_quantity}, 
           ${req.stock_quantity}, ${processedBy}, 'Initial stock'
         )
       `;
     }
 
-    return sparePart!;
+    await auditLog(
+      authContext.user.id,
+      "create",
+      "spare_part",
+      sparePart.id,
+      { part_code: partCode, name: req.name }
+    );
+
+    return sparePart;
   }
 );

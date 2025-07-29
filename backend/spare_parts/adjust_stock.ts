@@ -1,19 +1,25 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { sparePartsDB } from "./db";
 import { StockAdjustmentRequest, SparePart } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
 
-// Adjusts the stock quantity of a spare part.
-export const adjustStock = api<StockAdjustmentRequest, SparePart>(
+interface AuthenticatedStockAdjustmentRequest extends StockAdjustmentRequest {
+  authorization?: Header<"Authorization">;
+}
+
+// Adjusts the stock quantity of a spare part. Admin-only.
+export const adjustStock = api<AuthenticatedStockAdjustmentRequest, SparePart>(
   { expose: true, method: "POST", path: "/spare-parts/adjust-stock" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin"]);
+
     if (req.new_quantity < 0) {
       throw APIError.invalidArgument("Stock quantity cannot be negative");
     }
 
     // Get current stock
     const currentPart = await sparePartsDB.queryRow<SparePart>`
-      SELECT id, part_code, name, description, brand, cost_price, selling_price,
-             stock_quantity, min_stock_level, unit_measure, created_at, updated_at, is_active
+      SELECT id, stock_quantity
       FROM spare_parts 
       WHERE id = ${req.spare_part_id} AND is_active = true
     `;
@@ -24,9 +30,7 @@ export const adjustStock = api<StockAdjustmentRequest, SparePart>(
 
     const quantityDiff = req.new_quantity - currentPart.stock_quantity;
     const movementType = quantityDiff > 0 ? "in" : quantityDiff < 0 ? "out" : "adjustment";
-
-    // TODO: Get processed_by from auth context
-    const processedBy = 1; // Placeholder
+    const processedBy = authContext.user.id;
 
     // Start transaction
     await sparePartsDB.exec`BEGIN`;
@@ -40,6 +44,10 @@ export const adjustStock = api<StockAdjustmentRequest, SparePart>(
         RETURNING id, part_code, name, description, brand, cost_price, selling_price,
                   stock_quantity, min_stock_level, unit_measure, created_at, updated_at, is_active
       `;
+
+      if (!updatedPart) {
+        throw APIError.notFound("Spare part not found during update");
+      }
 
       // Record stock movement
       await sparePartsDB.exec`
@@ -55,7 +63,19 @@ export const adjustStock = api<StockAdjustmentRequest, SparePart>(
 
       await sparePartsDB.exec`COMMIT`;
 
-      return updatedPart!;
+      await auditLog(
+        authContext.user.id,
+        "adjust_stock",
+        "spare_part",
+        updatedPart.id,
+        { 
+          from: currentPart.stock_quantity,
+          to: req.new_quantity,
+          notes: req.notes
+        }
+      );
+
+      return updatedPart;
     } catch (error) {
       await sparePartsDB.exec`ROLLBACK`;
       throw error;

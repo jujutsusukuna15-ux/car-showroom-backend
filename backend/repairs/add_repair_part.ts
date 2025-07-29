@@ -1,11 +1,18 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { repairsDB } from "./db";
 import { AddRepairPartRequest, RepairPart } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
+
+interface AuthenticatedAddRepairPartRequest extends AddRepairPartRequest {
+  authorization?: Header<"Authorization">;
+}
 
 // Adds a spare part to a repair work order.
-export const addRepairPart = api<AddRepairPartRequest, RepairPart>(
+export const addRepairPart = api<AuthenticatedAddRepairPartRequest, RepairPart>(
   { expose: true, method: "POST", path: "/repairs/parts" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin", "mechanic"]);
+
     // Check if repair exists
     const repair = await repairsDB.queryRow`
       SELECT id FROM repairs WHERE id = ${req.repair_id}
@@ -43,6 +50,10 @@ export const addRepairPart = api<AddRepairPartRequest, RepairPart>(
         RETURNING id, repair_id, spare_part_id, quantity_used, unit_cost, total_cost, used_at, notes
       `;
 
+      if (!repairPart) {
+        throw new Error("Failed to add repair part");
+      }
+
       // Update spare part stock
       await repairsDB.exec`
         UPDATE spare_parts 
@@ -67,8 +78,7 @@ export const addRepairPart = api<AddRepairPartRequest, RepairPart>(
       `;
 
       // Record stock movement
-      // TODO: Get processed_by from auth context
-      const processedBy = 1; // Placeholder
+      const processedBy = authContext.user.id;
 
       await repairsDB.exec`
         INSERT INTO stock_movements (
@@ -85,7 +95,18 @@ export const addRepairPart = api<AddRepairPartRequest, RepairPart>(
 
       await repairsDB.exec`COMMIT`;
 
-      return repairPart!;
+      await auditLog(
+        authContext.user.id,
+        "add_part",
+        "repair",
+        req.repair_id,
+        { 
+          spare_part_id: req.spare_part_id,
+          quantity: req.quantity_used
+        }
+      );
+
+      return repairPart;
     } catch (error) {
       await repairsDB.exec`ROLLBACK`;
       throw error;

@@ -1,11 +1,18 @@
-import { api, APIError } from "encore.dev/api";
+import { api, APIError, Header } from "encore.dev/api";
 import { vehiclesDB } from "./db";
 import { UploadImageRequest, VehicleImage } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
+
+interface AuthenticatedUploadImageRequest extends UploadImageRequest {
+  authorization?: Header<"Authorization">;
+}
 
 // Uploads an image for a vehicle.
-export const uploadImage = api<UploadImageRequest, VehicleImage>(
+export const uploadImage = api<AuthenticatedUploadImageRequest, VehicleImage>(
   { expose: true, method: "POST", path: "/vehicles/images" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin", "cashier", "mechanic"]);
+
     // Check if vehicle exists
     const vehicle = await vehiclesDB.queryRow`
       SELECT id FROM vehicles WHERE id = ${req.vehicle_id}
@@ -24,8 +31,7 @@ export const uploadImage = api<UploadImageRequest, VehicleImage>(
       `;
     }
 
-    // TODO: Get uploaded_by from auth context
-    const uploadedBy = 1; // Placeholder
+    const uploadedBy = authContext.user.id;
 
     // Generate image path (in real implementation, this would be handled by file upload)
     const imagePath = `/uploads/vehicles/${req.vehicle_id}/${Date.now()}.jpg`;
@@ -36,6 +42,18 @@ export const uploadImage = api<UploadImageRequest, VehicleImage>(
       RETURNING id, vehicle_id, image_path, image_type, description, is_primary, uploaded_at, uploaded_by
     `;
 
-    return image!;
+    if (!image) {
+      throw new Error("Failed to upload image");
+    }
+
+    await auditLog(
+      authContext.user.id,
+      "upload",
+      "vehicle_image",
+      image.id,
+      { vehicle_id: req.vehicle_id, image_type: req.image_type }
+    );
+
+    return image;
   }
 );

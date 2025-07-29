@@ -1,18 +1,22 @@
-import { api, Query } from "encore.dev/api";
+import { api, Query, Header } from "encore.dev/api";
 import { authDB } from "./db";
 import { ListUsersResponse, User } from "./types";
+import { requireRole } from "./auth_middleware";
 
-interface ListUsersRequest {
+interface AuthenticatedListUsersRequest {
   page?: Query<number>;
   limit?: Query<number>;
   role?: Query<string>;
   is_active?: Query<boolean>;
+  authorization?: Header<"Authorization">;
 }
 
-// Retrieves all users with optional filtering.
-export const listUsers = api<ListUsersRequest, ListUsersResponse>(
+// Retrieves all users with optional filtering. Admin-only.
+export const listUsers = api<AuthenticatedListUsersRequest, ListUsersResponse>(
   { expose: true, method: "GET", path: "/auth/users" },
   async (req) => {
+    await requireRole(req.authorization, ["admin"]);
+
     const page = req.page || 1;
     const limit = req.limit || 50;
     const offset = (page - 1) * limit;

@@ -1,17 +1,23 @@
-import { api } from "encore.dev/api";
+import { api, Header } from "encore.dev/api";
 import { vehiclesDB } from "./db";
 import { CreateVehicleRequest, Vehicle } from "./types";
+import { requireRole, auditLog } from "../auth/auth_middleware";
+
+interface AuthenticatedCreateVehicleRequest extends CreateVehicleRequest {
+  authorization?: Header<"Authorization">;
+}
 
 // Creates a new vehicle record.
-export const createVehicle = api<CreateVehicleRequest, Vehicle>(
+export const createVehicle = api<AuthenticatedCreateVehicleRequest, Vehicle>(
   { expose: true, method: "POST", path: "/vehicles" },
   async (req) => {
+    const authContext = await requireRole(req.authorization, ["admin", "cashier"]);
+
     // Generate vehicle code
     const timestamp = Date.now().toString().slice(-6);
     const vehicleCode = `VEH${timestamp}`;
 
-    // TODO: Get cashier ID from auth context
-    const purchasedByCashier = 1; // Placeholder
+    const purchasedByCashier = authContext.user.id;
 
     const vehicle = await vehiclesDB.queryRow<Vehicle>`
       INSERT INTO vehicles (
@@ -32,6 +38,18 @@ export const createVehicle = api<CreateVehicleRequest, Vehicle>(
                 purchased_at, sold_at, created_at, updated_at, purchase_notes, condition_notes
     `;
 
-    return vehicle!;
+    if (!vehicle) {
+      throw new Error("Failed to create vehicle");
+    }
+
+    await auditLog(
+      authContext.user.id,
+      "create",
+      "vehicle",
+      vehicle.id,
+      { vehicle_code: vehicleCode, brand: req.brand, model: req.model }
+    );
+
+    return vehicle;
   }
 );
